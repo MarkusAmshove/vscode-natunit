@@ -1,15 +1,48 @@
 import * as vscode from 'vscode';
-import { TestCase, testData, NatUnitTestFile } from './natunit/testTree';
+import { natunitConfig, reloadConfiguration, setNatparm } from './natunit/config';
+import { testData, NatUnitTestCase, NatUnitTest, testToTestCase } from './natunit/testTree';
+
+let natparmItem: vscode.StatusBarItem;
 
 export async function activate(context: vscode.ExtensionContext) {
-	const ctrl = vscode.tests.createTestController('mathTestController', 'Markdown Math');
+	const ctrl = vscode.tests.createTestController('mathTestController', 'NatUnit');
 	context.subscriptions.push(ctrl);
 
-	const runHandler = (request: vscode.TestRunRequest, cancellation: vscode.CancellationToken) => {
-		const queue: { test: vscode.TestItem; data: TestCase }[] = [];
-		const run = ctrl.createTestRun(request);
-		// map of file uris to statements on each line:
-		// const coveredLines = new Map</* file uri */ string, (vscode.StatementCoverage | undefined)[]>();
+	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+		if(e.affectsConfiguration("natunit")) {
+			reloadConfiguration();
+			updateNatparmInfo();
+		}
+	}));
+
+	context.subscriptions.push(vscode.commands.registerCommand("natunit.natparm.change", async () => {
+		await changeNatparm();
+	}));
+
+	reloadConfiguration();
+	setupNatparmInfo();
+
+	const runHandler = async (request: vscode.TestRunRequest, cancellation: vscode.CancellationToken) => {
+		const queue: NatUnitTestCase[] = [];
+
+		// Convert single test requests to a testcase request, because NatUnit can only run all tests in a testcase
+		const newIncludes: vscode.TestItem[] = [];
+		for(let include of request.include || []) {
+			const testCase = testToTestCase.get(include);
+			if(!testCase?.didResolve) {
+				await testCase?.updateFromDisk(ctrl, include);
+			}
+			testCase?.testsInCase.forEach(t => newIncludes.push(t));
+		}
+
+		const testCaseRequest : vscode.TestRunRequest = {
+			include: Array.from(new Set(newIncludes)),
+			exclude: request.exclude,
+			profile: request.profile
+		};
+
+		const natparm = natunitConfig.currentNatparm;
+		const run = ctrl.createTestRun(testCaseRequest, natparm, false);
 
 		const discoverTests = async (tests: Iterable<vscode.TestItem>) => {
 			for (const test of tests) {
@@ -18,15 +51,19 @@ export async function activate(context: vscode.ExtensionContext) {
 				}
 
 				const data = testData.get(test);
-				if (data instanceof TestCase) {
-					run.enqueued(test);
-					queue.push({ test, data });
+				if (data instanceof NatUnitTest) {
+					const testCase = testData.get(test.parent!) as NatUnitTestCase;
+					testCase.testsInCase.forEach(t => run.enqueued(t));
+					queue.push( testCase );
 				} else {
-					if (data instanceof NatUnitTestFile && !data.didResolve) {
+					if (data instanceof NatUnitTestCase && !data.didResolve) {
 						await data.updateFromDisk(ctrl, test);
 					}
 
-					await discoverTests(gatherTestItems(test.children));
+					if (data instanceof NatUnitTestCase) {
+						data.testsInCase.forEach(t => run.enqueued(t));
+						queue.push(data);
+					}
 				}
 
 				// if (test.uri && !coveredLines.has(test.uri.toString())) {
@@ -46,13 +83,14 @@ export async function activate(context: vscode.ExtensionContext) {
 		};
 
 		const runTestQueue = async () => {
-			for (const { test, data } of queue) {
-				run.appendOutput(`Running ${test.id}\r\n`);
+			for (const data of queue) {
+				run.appendOutput(`Running ${data.name}\r\n`);
+				const testsInCase = data.testsInCase;
 				if (cancellation.isCancellationRequested) {
-					run.skipped(test);
+					testsInCase.forEach(t => run.skipped(t));
 				} else {
-					run.started(test);
-					await data.run(test, run);
+					testsInCase.forEach(t => run.started(t));
+					await data.run(run, natparm);
 				}
 
 				// const lineNo = test.range!.start.line;
@@ -61,7 +99,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				// 	fileCoverage[lineNo]!.executionCount++;
 				// }
 
-				run.appendOutput(`Completed ${test.id}\r\n`);
+				run.appendOutput(`Completed ${data.name}\r\n`);
 			}
 
 			run.end();
@@ -82,7 +120,6 @@ export async function activate(context: vscode.ExtensionContext) {
 		// 		return coverage;
 		// 	},
 		// };
-
 		discoverTests(request.include ?? gatherTestItems(ctrl.items)).then(runTestQueue);
 	};
 
@@ -90,8 +127,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		await Promise.all(getWorkspaceTestPatterns().map(({ pattern }) => findInitialFiles(ctrl, pattern)));
 	};
 
-	ctrl.createRunProfile('V98ENTW', vscode.TestRunProfileKind.Run, runHandler, true);
-	ctrl.createRunProfile('V88ENTW', vscode.TestRunProfileKind.Run, runHandler, true);
+	ctrl.createRunProfile('Run Tests', vscode.TestRunProfileKind.Run, runHandler, true);
 
 	ctrl.resolveHandler = async item => {
 		if (!item) {
@@ -100,7 +136,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		}
 
 		const data = testData.get(item);
-		if (data instanceof NatUnitTestFile) {
+		if (data instanceof NatUnitTestCase) {
 			await data.updateFromDisk(ctrl, item);
 		}
 	};
@@ -110,7 +146,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
-		if (!e.uri.path.match('*\.NSN$')) {
+		if (!e.uri.path.match('.*?/TC[a-z]+\.NSN$')) {
 			return;
 		}
 
@@ -128,16 +164,17 @@ export async function activate(context: vscode.ExtensionContext) {
 	);
 }
 
-function getOrCreateFile(controller: vscode.TestController, uri: vscode.Uri) {
+function getOrCreateFile(controller: vscode.TestController, uri: vscode.Uri) { // TODO: Rename file -> test
 	const existing = controller.items.get(uri.toString());
 	if (existing) {
-		return { file: existing, data: testData.get(existing) as NatUnitTestFile };
+		return { file: existing, data: testData.get(existing) as NatUnitTestCase };
 	}
 
 	const file = controller.createTestItem(uri.toString(), uri.path.split('/').pop()!.replace(".NSN", ""), uri);
 	controller.items.add(file);
 
-	const data = new NatUnitTestFile();
+	const data = new NatUnitTestCase();
+	testToTestCase.set(file, data);
 	testData.set(file, data);
 
 	file.canResolveChildren = true;
@@ -185,3 +222,37 @@ function startWatchingWorkspace(controller: vscode.TestController) {
 		return watcher;
 	});
 }
+
+function setupNatparmInfo() {
+	natparmItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+	natparmItem.command = 'natunit.natparm.change';
+	natparmItem.color = new vscode.ThemeColor('statusBarItem.remoteForeground');
+	natparmItem.tooltip = 'Change NATPARM';
+	updateNatparmInfo();
+	natparmItem.show();
+}
+
+function updateNatparmInfo() {
+	natparmItem.text = `$(beaker) ${natunitConfig.currentNatparm}`;
+}
+
+async function changeNatparm() {
+	const possibleValues = natunitConfig.natparms;
+	if(possibleValues.length === 0) {
+		await vscode.window.showErrorMessage("No possible NATPARMs configured, check the extension configuration");
+		return;
+	}
+
+	if(possibleValues.length < 3) {
+		setNatparm(possibleValues.filter(v => v !== natunitConfig.currentNatparm)[0]);
+		updateNatparmInfo();
+		return;
+	}
+
+	const selectedNatparm = await vscode.window.showQuickPick(possibleValues, {canPickMany: false, title: "Select NATPARM"});
+	if(selectedNatparm) {
+		setNatparm(selectedNatparm);
+		updateNatparmInfo();
+	}
+}
+

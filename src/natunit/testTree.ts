@@ -1,12 +1,18 @@
 import { TextDecoder } from 'util';
 import * as vscode from 'vscode';
-import { parseMarkdown } from './parser';
+import { parseTestCase } from './parser';
+import * as child_process from 'child_process';
+import { XMLParser } from 'fast-xml-parser';
+import { XmlTestCase, XmlTestSuite } from './xmltestresult';
+import * as fsAsync from 'fs/promises';
+import { natunitConfig } from './config';
 
 const textDecoder = new TextDecoder('utf-8');
 
-export type MarkdownTestData = NatUnitTestFile | TestHeading | TestCase;
+export type NatUnitTestData = NatUnitTestCase | NatUnitTest;
 
-export const testData = new WeakMap<vscode.TestItem, MarkdownTestData>();
+export const testData = new WeakMap<vscode.TestItem, NatUnitTestData>();
+export const testToTestCase = new WeakMap<vscode.TestItem, NatUnitTestCase>();
 
 let generationCounter = 0;
 
@@ -20,11 +26,18 @@ export const getContentFromFilesystem = async (uri: vscode.Uri) => {
 	}
 };
 
-export class NatUnitTestFile {
-	public didResolve = false;
+export class NatUnitTestCase {
+	public didResolve = false
+	private tests: vscode.TestItem[] = [];
+	public name: string = "";
+
+	public get testsInCase() {
+		return this.tests;
+	}
 
 	public async updateFromDisk(controller: vscode.TestController, item: vscode.TestItem) {
 		try {
+			this.name = item.uri!.path.split('/').pop()!.replace(".NSN", "");
 			const content = await getContentFromFilesystem(item.uri!);
 			item.error = undefined;
 			this.updateFromContents(controller, content, item);
@@ -49,7 +62,8 @@ export class NatUnitTestFile {
 			}
 		};
 
-		parseMarkdown(content, {
+		this.tests = [];
+		parseTestCase(content, {
 			onTest: (range, testName) => {
 				const parent = ancestors[ancestors.length - 1];
 				const data = new NatUnitTest(testName, thisGeneration);
@@ -58,20 +72,104 @@ export class NatUnitTestFile {
 
 				const tcase = controller.createTestItem(id, testName, item.uri);
 				testData.set(tcase, data);
+				testToTestCase.set(tcase, this);
 				tcase.range = range;
 				parent.children.push(tcase);
+				this.tests.push(tcase);
 			},
 		});
 
 		ascend(0); // finish and assign children for all remaining items
 	}
-}
 
-export class TestHeading {
-	constructor(public generation: number) { }
-}
+	async run(testRun: vscode.TestRun, natparm: string): Promise<void> {
+		const splittedPath = this.tests[0].uri?.path.split('/')
+		if(!splittedPath) {
+			this.tests.forEach(t => testRun.skipped(t));
+			return;
+		}
 
-type Operator = '+' | '-' | '*' | '/';
+		const testCaseName = splittedPath.pop()!.replace(".NSN", "");
+		const testFileLibrary = splittedPath[splittedPath.indexOf('Natural-Libraries') + 1];
+
+		(await vscode.workspace.findFiles(`build/test-results/natunit/${natparm}/${testFileLibrary}-${testCaseName}.xml`))
+			.forEach(async f => await vscode.workspace.fs.delete(f, {useTrash: false, recursive: false}));
+
+		const workspacePath = vscode.workspace.workspaceFolders![0].uri.fsPath;
+		const processStartCommand = process.platform === 'linux'
+			? `bash -c " cd ${workspacePath} && ./${natunitConfig.linuxScript} '${testFileLibrary}' '${testCaseName}' '${natparm}'"`
+			: `powershell.exe -NoProfile -Command "cd ${workspacePath}; ./${natunitConfig.windowsScript} '${testFileLibrary}' '${testCaseName}' '${natparm}'"`;
+		const testProcess = child_process.spawn(processStartCommand, {shell:true});
+		let stdOut = "";
+        let stdErr = "";
+        testProcess.stdout?.on('data', d => stdOut += d.toString());
+        testProcess.stderr?.on('data', d => stdErr += d.toString());
+
+		for (let test of this.tests) {
+			testRun.started(test);
+		}
+
+		await new Promise((resolve, _) => testProcess.on('close', resolve));
+
+		const resultFiles = await vscode.workspace.findFiles(`build/test-results/natunit/${natparm}/${testFileLibrary}-${testCaseName}.xml`);
+        for (let resultFile of resultFiles) {
+            const suiteResult = await this.parseTestResults(resultFile.fsPath);
+            const reportResult = this.extractResults(suiteResult.testcase);
+
+			for (let test of this.tests) {
+				const result = reportResult.find(r => r._name === test.label.trim());
+				if(!result || result.skipped === '') {
+					testRun.skipped(test);
+					continue;
+				}
+                if(result.failure) {
+					testRun.failed(test, {
+						message: result.failure._message,
+						...this.parseFailure(result.failure._message)
+					}, result._time);
+					continue;
+				}
+				testRun.passed(test, result._time * 1000);
+			}
+        }
+	}
+
+	private parseFailure(failureMessage: string) : {actualOutput: string, expectedOutput: string} {
+		if(failureMessage.includes("> should be <")) {
+			const splittedMessage = failureMessage.split("should be");
+			const actualMessagePart = splittedMessage[0];
+			const expectedMessagePart = splittedMessage[1];
+			const getValuePart = (messagePart: string) => messagePart.substring(messagePart.indexOf("<") + 1, messagePart.lastIndexOf(">"));
+			return {
+				actualOutput: getValuePart(actualMessagePart),
+				expectedOutput: getValuePart(expectedMessagePart)
+			}
+		}
+		return {
+			actualOutput: failureMessage,
+			expectedOutput: ''
+		};
+	}
+
+	private async parseTestResults(resultFile: string): Promise<XmlTestSuite> {
+        const parser = new XMLParser({ attributeNamePrefix: '_', parseAttributeValue: true, ignoreAttributes: false });
+        const xmlContent = await fsAsync.readFile(resultFile, {encoding: 'latin1'});
+        const xml = parser.parse(xmlContent);
+        return xml.testsuite as XmlTestSuite;
+    }
+
+	private extractResults(result: XmlTestCase | XmlTestCase[]) : XmlTestCase[] {
+        if(this.areMultipleResults(result)) {
+            return result;
+        }
+
+        return [result];
+    }
+
+    private areMultipleResults(result: XmlTestCase | XmlTestCase[]): result is XmlTestCase[] {
+        return (result as XmlTestCase[]).map !== undefined;
+    }
+}
 
 export class NatUnitTest {
     constructor(
@@ -82,46 +180,4 @@ export class NatUnitTest {
     getLabel() {
         return this.name;
     }
-}
-
-export class TestCase {
-	constructor(
-		private readonly a: number,
-		private readonly operator: Operator,
-		private readonly b: number,
-		private readonly expected: number,
-		public generation: number
-	) { }
-
-	getLabel() {
-		return `${this.a} ${this.operator} ${this.b} = ${this.expected}`;
-	}
-
-	async run(item: vscode.TestItem, options: vscode.TestRun): Promise<void> {
-		const start = Date.now();
-		await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1000));
-		const actual = this.evaluate();
-		const duration = Date.now() - start;
-
-		if (actual === this.expected) {
-			options.passed(item, duration);
-		} else {
-			const message = vscode.TestMessage.diff(`Expected ${item.label}`, String(this.expected), String(actual));
-			message.location = new vscode.Location(item.uri!, item.range!);
-			options.failed(item, message, duration);
-		}
-	}
-
-	private evaluate() {
-		switch (this.operator) {
-			case '-':
-				return this.a - this.b;
-			case '+':
-				return this.a + this.b;
-			case '/':
-				return Math.floor(this.a / this.b);
-			case '*':
-				return this.a * this.b;
-		}
-	}
 }

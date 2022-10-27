@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 const testRegex = /^\s*IF NUTESTP.TEST EQ\s+'(.*?)'/g;
 
-export const parseMarkdown = (text: string, events: {
+export const parseTestCase = (text: string, events: {
 	onTest(range: vscode.Range, name: string): void;
 }) => {
 	const lines = text.split('\n');

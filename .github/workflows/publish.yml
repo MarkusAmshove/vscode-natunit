@@ -4,13 +4,11 @@ on:
   push:
     tags:
       - "v*"
-  workflow_run:
-    workflows: [CI]
-    types:
-      - completed
 
 jobs:
   deploy:
+    needs: [CI]
+    if: ${{ needs.CI.result == 'success' }}
     runs-on: ubuntu-latest
     name: Release Extension
     steps:

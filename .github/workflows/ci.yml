@@ -24,7 +24,7 @@ jobs:
 
   deploy:
     needs: [build]
-    if: ${{ needs.build.result == 'success' }}
+    if: ${{ startsWith(github.event.ref, 'refs/tags/v') && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     name: Release Extension
     steps:

@@ -1,71 +1,45 @@
-# vscode-natunit README
+# vscode-natunit
 
-This is the README for your extension "vscode-natunit". After writing up a brief description, we recommend including the following sections.
+[![Visual Studio Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/markusamshove.vscode-natunit?color=%2300cc00&label=marketplace%20version)](https://marketplace.visualstudio.com/items?itemName=markusamshove.vscode-natunit)
 
-## Features
+Test explorer integration for NatUnit in VSCode.
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+# Prerequisites
 
-For example if there is an image subfolder under your extension project workspace:
+For this extension to work (run tests and parse results) it needs a NatUnit version which writes test results to disk in a JUnit XML format.
 
-\!\[feature X\]\(images/feature-x.png\)
+Additionally, there needs to be a bash script (on Linux) or PowerShell script (on Windows) within the workspace that starts the Natural process and makes sure that the test result file is copied to the expected location.
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+Both scripts are passed the following parameter in order:
 
-## Requirements
+1. `LIBRARY`: The library the testcase resides in
+1. `TESTCASE`: The name of the testcase without extension (e.g. `TCSTTEST`
+1. `NATPARM`: The NATPARM that the Natural process should be started with
+1. `COVERAGE`: Flag if coverage data should be recorded (currently not implemented, preview API of VSCode)
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+The results are expected to land in the following directory, relative to the workspace (may be configurable in the future):
 
-## Extension Settings
+`build/test-results/natunit/${natparm}/${testFileLibrary}-${testCaseName}.xml`
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+# Configuration
 
-For example:
+The extension has the following configurations:
 
-This extension contributes the following settings:
+1. `natunit.script.windows`: Relative workspace path to the PowerShell script to run to invoke NatUnit on Windows
+1. `natunit.script.linux`: Relative workspace path to the script to run to invoke NatUnit on Linux
+1. `natunit.natparms`: Possible NATPARMs to run tests with. Will be passed to the run script.
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+NATPARMs need to be configured in JSON format, e.g.:
 
-## Known Issues
+```json
+	"natunit.natparms": [
+		"NATPARM1",
+		"NATPARM2"
+	]
+```
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+# Assertion failures
 
-## Release Notes
+Some assertion failures get parsed and rendered differently in the UI, e.g. `ASSERT-STRING-EQUALS`:
 
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+![String equals failure][doc/natunitresult.png)

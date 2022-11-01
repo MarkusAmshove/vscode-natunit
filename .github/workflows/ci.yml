@@ -1,9 +1,11 @@
-name: CI
+name: Build
 
 on:
   push:
     branches:
       - main
+  tags:
+    - "v*"
   pull_request:
     types: [opened, synchronize, reopened]
 
@@ -19,4 +21,23 @@ jobs:
         node-version: 14.x
     - run: npm install
     - run: xvfb-run -a npm test
-      if: runner.os == 'Linux'
+
+ deploy:
+  needs: [build]
+  if: ${{ needs.build.result == 'success' }}
+  runs-on: ubuntu-latest
+  name: Release Extension
+  steps:
+  - uses: actions/checkout@v2
+  - uses: actions/setup-node@v1
+    with:
+      node-version: 14
+
+  - name: Build
+    run: npm ci
+
+  - name: Package extension
+    run: npx vsce package
+
+  - name: Publish extensions
+    run: npx vsce publish --pat ${{ secrets.VS_MARKETPLACE_TOKEN }} if: runner.os == 'Linux'

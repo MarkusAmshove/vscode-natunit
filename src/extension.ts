@@ -5,7 +5,7 @@ import { testData, NatUnitTestCase, NatUnitTest, testToTestCase } from './natuni
 let natparmItem: vscode.StatusBarItem;
 
 export async function activate(context: vscode.ExtensionContext) {
-	const ctrl = vscode.tests.createTestController('mathTestController', 'NatUnit');
+	const ctrl = vscode.tests.createTestController('natunitTestController', 'NatUnit');
 	context.subscriptions.push(ctrl);
 
 	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {

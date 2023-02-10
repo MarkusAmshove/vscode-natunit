@@ -42,4 +42,4 @@ NATPARMs need to be configured in JSON format, e.g.:
 
 Some assertion failures get parsed and rendered differently in the UI, e.g. `ASSERT-STRING-EQUALS`:
 
-![String equals failure][doc/natunitresult.png)
+![String equals failure](doc/natunitresult.png)

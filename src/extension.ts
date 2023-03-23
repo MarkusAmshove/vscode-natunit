@@ -226,7 +226,7 @@ function startWatchingWorkspace(controller: vscode.TestController) {
 function setupNatparmInfo() {
 	natparmItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
 	natparmItem.command = 'natunit.natparm.change';
-	natparmItem.color = new vscode.ThemeColor('statusBarItem.remoteForeground');
+	natparmItem.color = new vscode.ThemeColor('statusBarItem.prominentForeground');
 	natparmItem.tooltip = 'Change NATPARM';
 	updateNatparmInfo();
 	natparmItem.show();

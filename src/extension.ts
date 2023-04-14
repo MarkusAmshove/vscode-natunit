@@ -154,6 +154,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		data.updateFromContents(ctrl, e.getText(), file);
 	}
 
+	await ctrl.refreshHandler(new vscode.CancellationTokenSource().token);
+
 	for (const document of vscode.workspace.textDocuments) {
 		updateTestNodeForDocument(document);
 	}

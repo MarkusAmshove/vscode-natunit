@@ -146,7 +146,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
-		if (!e.uri.path.match('.*?/TC[a-z]+\.NSN$')) {
+		if (!e.uri.path.match('.*?/TC.+\.NSN$')) {
 			return;
 		}
 

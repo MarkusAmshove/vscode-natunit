@@ -129,6 +129,11 @@ export class NatUnitTestCase {
 					}, result._time);
 					continue;
 				}
+				if(result.error) {
+					testRun.errored(test, {
+						message: result.error._message,
+					});
+				}
 				testRun.passed(test, result._time * 1000);
 			}
         }

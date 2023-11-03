@@ -1,12 +1,14 @@
 import * as vscode from 'vscode';
 import { natunitConfig, reloadConfiguration, setNatparm } from './natunit/config';
 import { testData, NatUnitTestCase, NatUnitTest, testToTestCase } from './natunit/testTree';
+import { NatUnitCodeLensProvider } from './natunit/codelenses';
 
 let natparmItem: vscode.StatusBarItem;
 
 export async function activate(context: vscode.ExtensionContext) {
 	const ctrl = vscode.tests.createTestController('natunitTestController', 'NatUnit');
 	context.subscriptions.push(ctrl);
+	context.subscriptions.push(vscode.languages.registerCodeLensProvider('natural', new NatUnitCodeLensProvider()));
 
 	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
 		if(e.affectsConfiguration("natunit")) {

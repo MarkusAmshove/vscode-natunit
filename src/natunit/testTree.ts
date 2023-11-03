@@ -30,6 +30,7 @@ export class NatUnitTestCase {
 	public didResolve = false
 	private tests: vscode.TestItem[] = [];
 	public name: string = "";
+	public path: string = "";
 
 	public get testsInCase() {
 		return this.tests;
@@ -37,6 +38,7 @@ export class NatUnitTestCase {
 
 	public async updateFromDisk(controller: vscode.TestController, item: vscode.TestItem) {
 		try {
+			this.path = item.uri!.path;
 			this.name = item.uri!.path.split('/').pop()!.replace(".NSN", "");
 			const content = await getContentFromFilesystem(item.uri!);
 			item.error = undefined;

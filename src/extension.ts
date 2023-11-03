@@ -8,7 +8,10 @@ let natparmItem: vscode.StatusBarItem;
 export async function activate(context: vscode.ExtensionContext) {
 	const ctrl = vscode.tests.createTestController('natunitTestController', 'NatUnit');
 	context.subscriptions.push(ctrl);
-	context.subscriptions.push(vscode.languages.registerCodeLensProvider('natural', new NatUnitCodeLensProvider()));
+
+	const hasDebugCapabilities = await canDebugTests();
+
+	context.subscriptions.push(vscode.languages.registerCodeLensProvider('natural', new NatUnitCodeLensProvider(hasDebugCapabilities)));
 
 	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
 		if(e.affectsConfiguration("natunit")) {
@@ -24,112 +27,16 @@ export async function activate(context: vscode.ExtensionContext) {
 	reloadConfiguration();
 	setupNatparmInfo();
 
-	const runHandler = async (request: vscode.TestRunRequest, cancellation: vscode.CancellationToken) => {
-		const queue: NatUnitTestCase[] = [];
-
-		// Convert single test requests to a testcase request, because NatUnit can only run all tests in a testcase
-		const newIncludes: vscode.TestItem[] = [];
-		for(let include of request.include || []) {
-			const testCase = testToTestCase.get(include);
-			if(!testCase?.didResolve) {
-				await testCase?.updateFromDisk(ctrl, include);
-			}
-			testCase?.testsInCase.forEach(t => newIncludes.push(t));
-		}
-
-		const testCaseRequest : vscode.TestRunRequest = {
-			include: Array.from(new Set(newIncludes)),
-			exclude: request.exclude,
-			profile: request.profile
-		};
-
-		const natparm = natunitConfig.currentNatparm;
-		const run = ctrl.createTestRun(testCaseRequest, natparm, false);
-
-		const discoverTests = async (tests: Iterable<vscode.TestItem>) => {
-			for (const test of tests) {
-				if (request.exclude?.includes(test)) {
-					continue;
-				}
-
-				const data = testData.get(test);
-				if (data instanceof NatUnitTest) {
-					const testCase = testData.get(test.parent!) as NatUnitTestCase;
-					testCase.testsInCase.forEach(t => run.enqueued(t));
-					queue.push( testCase );
-				} else {
-					if (data instanceof NatUnitTestCase && !data.didResolve) {
-						await data.updateFromDisk(ctrl, test);
-					}
-
-					if (data instanceof NatUnitTestCase) {
-						data.testsInCase.forEach(t => run.enqueued(t));
-						queue.push(data);
-					}
-				}
-
-				// if (test.uri && !coveredLines.has(test.uri.toString())) {
-				// 	try {
-				// 		const lines = (await getContentFromFilesystem(test.uri)).split('\n');
-				// 		coveredLines.set(
-				// 			test.uri.toString(),
-				// 			lines.map((lineText, lineNo) =>
-				// 				lineText.trim().length ? new vscode.StatementCoverage(0, new vscode.Position(lineNo, 0)) : undefined
-				// 			)
-				// 		);
-				// 	} catch {
-				// 		// ignored
-				// 	}
-				// }
-			}
-		};
-
-		const runTestQueue = async () => {
-			for (const data of queue) {
-				run.appendOutput(`Running ${data.name}\r\n`);
-				const testsInCase = data.testsInCase;
-				if (cancellation.isCancellationRequested) {
-					testsInCase.forEach(t => run.skipped(t));
-				} else {
-					testsInCase.forEach(t => run.started(t));
-					await data.run(run, natparm);
-				}
-
-				// const lineNo = test.range!.start.line;
-				// const fileCoverage = coveredLines.get(test.uri!.toString());
-				// if (fileCoverage) {
-				// 	fileCoverage[lineNo]!.executionCount++;
-				// }
-
-				run.appendOutput(`Completed ${data.name}\r\n`);
-			}
-
-			run.end();
-		};
-
-		// run.coverageProvider = {
-		// 	provideFileCoverage() {
-		// 		const coverage: vscode.FileCoverage[] = [];
-		// 		for (const [uri, statements] of coveredLines) {
-		// 			coverage.push(
-		// 				vscode.FileCoverage.fromDetails(
-		// 					vscode.Uri.parse(uri),
-		// 					statements.filter((s): s is vscode.StatementCoverage => !!s)
-		// 				)
-		// 			);
-		// 		}
-
-		// 		return coverage;
-		// 	},
-		// };
-		discoverTests(request.include ?? gatherTestItems(ctrl.items)).then(runTestQueue);
-	};
+	const runHandler = createRunHandler(ctrl, false);
 
 	ctrl.refreshHandler = async () => {
 		await Promise.all(getWorkspaceTestPatterns().map(({ pattern }) => findInitialFiles(ctrl, pattern)));
 	};
 
 	ctrl.createRunProfile('Run Tests', vscode.TestRunProfileKind.Run, runHandler, true);
+	if (hasDebugCapabilities) {
+		ctrl.createRunProfile('Debug Tests', vscode.TestRunProfileKind.Debug, createRunHandler(ctrl, true), false);
+	}
 
 	ctrl.resolveHandler = async item => {
 		if (!item) {
@@ -260,3 +167,131 @@ async function changeNatparm() {
 	}
 }
 
+function createRunHandler(ctrl: vscode.TestController, isDebug: boolean) {
+	return async (request: vscode.TestRunRequest, cancellation: vscode.CancellationToken) => {
+		const queue: NatUnitTestCase[] = [];
+
+		// Convert single test requests to a testcase request, because NatUnit can only run all tests in a testcase
+		const newIncludes: vscode.TestItem[] = [];
+		for(let include of request.include || []) {
+			const testCase = testToTestCase.get(include);
+			if(!testCase?.didResolve) {
+				await testCase?.updateFromDisk(ctrl, include);
+			}
+			testCase?.testsInCase.forEach(t => newIncludes.push(t));
+		}
+
+		const testCaseRequest : vscode.TestRunRequest = {
+			include: Array.from(new Set(newIncludes)),
+			exclude: request.exclude,
+			profile: request.profile
+		};
+
+		const natparm = natunitConfig.currentNatparm;
+		const run = ctrl.createTestRun(testCaseRequest, natparm, false);
+
+		const discoverTests = async (tests: Iterable<vscode.TestItem>) => {
+			for (const test of tests) {
+				if (request.exclude?.includes(test)) {
+					continue;
+				}
+
+				const data = testData.get(test);
+				if (data instanceof NatUnitTest) {
+					const testCase = testData.get(test.parent!) as NatUnitTestCase;
+					testCase.testsInCase.forEach(t => run.enqueued(t));
+					queue.push( testCase );
+				} else {
+					if (data instanceof NatUnitTestCase && !data.didResolve) {
+						await data.updateFromDisk(ctrl, test);
+					}
+
+					if (data instanceof NatUnitTestCase) {
+						data.testsInCase.forEach(t => run.enqueued(t));
+						queue.push(data);
+					}
+				}
+
+				// if (test.uri && !coveredLines.has(test.uri.toString())) {
+				// 	try {
+				// 		const lines = (await getContentFromFilesystem(test.uri)).split('\n');
+				// 		coveredLines.set(
+				// 			test.uri.toString(),
+				// 			lines.map((lineText, lineNo) =>
+				// 				lineText.trim().length ? new vscode.StatementCoverage(0, new vscode.Position(lineNo, 0)) : undefined
+				// 			)
+				// 		);
+				// 	} catch {
+				// 		// ignored
+				// 	}
+				// }
+			}
+		};
+
+		const runTestQueue = async () => {
+			for (const data of queue) {
+				run.appendOutput(`Running ${data.name}\r\n`);
+				const testsInCase = data.testsInCase;
+				if (cancellation.isCancellationRequested) {
+					testsInCase.forEach(t => run.skipped(t));
+				} else {
+					testsInCase.forEach(t => run.started(t));
+					if (isDebug) {
+						const folders = vscode.workspace.workspaceFolders;
+						await vscode.debug.startDebugging(folders ? folders[0] : undefined, debugConfig(data.path));
+					} else {
+						await data.run(run, natparm);
+					}
+				}
+
+				// const lineNo = test.range!.start.line;
+				// const fileCoverage = coveredLines.get(test.uri!.toString());
+				// if (fileCoverage) {
+				// 	fileCoverage[lineNo]!.executionCount++;
+				// }
+
+				run.appendOutput(`Completed ${data.name}\r\n`);
+			}
+
+			run.end();
+		};
+
+		// run.coverageProvider = {
+		// 	provideFileCoverage() {
+		// 		const coverage: vscode.FileCoverage[] = [];
+		// 		for (const [uri, statements] of coveredLines) {
+		// 			coverage.push(
+		// 				vscode.FileCoverage.fromDetails(
+		// 					vscode.Uri.parse(uri),
+		// 					statements.filter((s): s is vscode.StatementCoverage => !!s)
+		// 				)
+		// 			);
+		// 		}
+
+		// 		return coverage;
+		// 	},
+		// };
+		discoverTests(request.include ?? gatherTestItems(ctrl.items)).then(runTestQueue);
+	};
+}
+
+function debugConfig(testcase: string) : vscode.DebugConfiguration {
+	return {
+		name: "Debug Testcase",
+		request: "launch",
+		type: "natural",
+		programm: testcase,
+		workspace: "${workspaceFolder}"
+	}
+}
+
+async function canDebugTests() : Promise<boolean> {
+	const bob = vscode.extensions.getExtension('alteoldenburger.vscode-bob');
+	if (!bob) {
+		return false;
+	}
+	if (!bob.isActive) {
+		await bob.activate();
+	}
+	return true;
+}

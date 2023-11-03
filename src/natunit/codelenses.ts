@@ -7,6 +7,8 @@ export class NatUnitCodeLensProvider implements vscode.CodeLensProvider {
 
     private codeLenses : vscode.CodeLens[] = [];
 
+    constructor(private hasDebugCapabilities: boolean) {}
+
     provideCodeLenses(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.CodeLens[]> {
         this.codeLenses = [];
 
@@ -30,12 +32,24 @@ export class NatUnitCodeLensProvider implements vscode.CodeLensProvider {
     }
 
     private createCodeLensForRange(range: vscode.Range) : vscode.CodeLens[] {
-        return [
+        const lenses = [
             new vscode.CodeLens(range, {
                 title: "$(testing-run-icon) Run",
                 tooltip: "Run the current test case",
                 command: "testing.runCurrentFile"
             }),
-        ]
+        ];
+
+        if (this.hasDebugCapabilities) {
+            lenses.push(
+                new vscode.CodeLens(range, {
+                    title: "$(testing-debug-icon) Debug",
+                    tooltip: "Debug the current test case",
+                    command: "testing.debugCurrentFile"
+                }),
+            );
+        }
+
+        return lenses;
     }
 };

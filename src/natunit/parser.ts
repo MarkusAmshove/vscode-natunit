@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-const testRegex = /^\s*IF NUTESTP.TEST EQ\s+'(.*?)'/g;
+export const testRegex = /^\s*IF NUTESTP.TEST EQ\s+'(.*?)'/g;
 const testDataRegex = /^\s*\/\*\s*@TESTDATA/g;
 
 export const parseTestCase = (text: string, events: {

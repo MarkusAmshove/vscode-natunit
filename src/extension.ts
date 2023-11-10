@@ -4,6 +4,7 @@ import { testData, NatUnitTestCase, NatUnitTest, testToTestCase } from './natuni
 import { NatUnitCodeLensProvider } from './natunit/codelenses';
 
 let natparmItem: vscode.StatusBarItem;
+let diagnostics: vscode.DiagnosticCollection;
 
 export async function activate(context: vscode.ExtensionContext) {
 	const ctrl = vscode.tests.createTestController('natunitTestController', 'NatUnit');
@@ -11,6 +12,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	const hasDebugCapabilities = await canDebugTests();
 
+	diagnostics = vscode.languages.createDiagnosticCollection('NatUnit');
 	context.subscriptions.push(vscode.languages.registerCodeLensProvider('natural', new NatUnitCodeLensProvider(hasDebugCapabilities)));
 
 	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
@@ -240,7 +242,7 @@ function createRunHandler(ctrl: vscode.TestController, isDebug: boolean) {
 						const folders = vscode.workspace.workspaceFolders;
 						await vscode.debug.startDebugging(folders ? folders[0] : undefined, debugConfig(data.path));
 					} else {
-						await data.run(run, natparm);
+						await data.run(run, natparm, diagnostics);
 					}
 				}
 

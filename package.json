@@ -2,7 +2,7 @@
   "name": "vscode-natunit",
   "displayName": "vscode-natunit",
   "description": "NatUnit runner and test explorer",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "markusamshove",
   "repository": {
     "type": "git",

@@ -10,6 +10,10 @@ import { natunitConfig } from './config';
 const textDecoder = new TextDecoder('utf-8');
 
 export type NatUnitTestData = NatUnitTestCase | NatUnitTest;
+type NatUnitDiagnostic = {
+	line: number;
+	message: string;
+}
 
 export const testData = new WeakMap<vscode.TestItem, NatUnitTestData>();
 export const testToTestCase = new WeakMap<vscode.TestItem, NatUnitTestCase>();
@@ -84,12 +88,15 @@ export class NatUnitTestCase {
 		ascend(0); // finish and assign children for all remaining items
 	}
 
-	async run(testRun: vscode.TestRun, natparm: string): Promise<void> {
+	async run(testRun: vscode.TestRun, natparm: string, diagnostics: vscode.DiagnosticCollection): Promise<void> {
 		const splittedPath = this.tests[0].uri?.path.split('/')
 		if(!splittedPath) {
 			this.tests.forEach(t => testRun.skipped(t));
 			return;
 		}
+
+		const testCaseUri = vscode.Uri.file(this.path);
+		diagnostics.delete(testCaseUri);
 
 		const testCaseName = splittedPath.pop()!.replace(".NSN", "");
 		const testFileLibrary = splittedPath[splittedPath.indexOf('Natural-Libraries') + 1];
@@ -114,6 +121,7 @@ export class NatUnitTestCase {
 		await new Promise((resolve, _) => testProcess.on('close', resolve));
 
 		const resultFiles = await vscode.workspace.findFiles(`build/test-results/natunit/${natparm}/${testFileLibrary}-${testCaseName}.xml`);
+		let newDiagnostics : NatUnitDiagnostic[] = [];
         for (let resultFile of resultFiles) {
             const suiteResult = await this.parseTestResults(resultFile.fsPath);
             const reportResult = this.extractResults(suiteResult.testcase);
@@ -124,21 +132,53 @@ export class NatUnitTestCase {
 					testRun.skipped(test);
 					continue;
 				}
+
                 if(result.failure) {
 					testRun.failed(test, {
 						message: result.failure._message,
 						...this.parseFailure(result.failure._message)
 					}, result._time);
+					const diagnostic = this.extractDiagnostic(result.failure._message);
+					if(diagnostic) {
+						newDiagnostics.push(diagnostic);
+					}
 					continue;
 				}
 				if(result.error) {
 					testRun.errored(test, {
 						message: result.error._message,
 					});
+					const diagnostic = this.extractDiagnostic(result.error._message);
+					if(diagnostic) {
+						newDiagnostics.push(diagnostic);
+					}
+					continue;
 				}
+
 				testRun.passed(test, result._time * 1000);
 			}
         }
+
+		const document = await vscode.workspace.openTextDocument(testCaseUri);
+		const diagnosticsToPublish = newDiagnostics.map(d => new vscode.Diagnostic(
+			document.lineAt(d.line).range,
+			d.message,
+			vscode.DiagnosticSeverity.Error
+		));
+		diagnostics.set(testCaseUri, diagnosticsToPublish);
+	}
+
+	private extractDiagnostic(message: string) : NatUnitDiagnostic | undefined {
+		const lineNumberRegex = new RegExp(`^\\s*${this.name}\\s*\\((\\d+)\\)`);
+		const matches = lineNumberRegex.exec(message);
+		if (matches && matches.length > 0) {
+			const linenumber = Number.parseInt(matches[1]);
+			const actualLinenumber = linenumber + 3; // Natural +4 but zero based
+			return {
+				line: actualLinenumber,
+				message: message,
+			};
+		}
 	}
 
 	private parseFailure(failureMessage: string) : {actualOutput: string, expectedOutput: string} {
